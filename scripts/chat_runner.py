@@ -130,6 +130,29 @@ TEST_CONVERSATIONS = {
             "which teams have the easiest fixtures next 5 gameweeks? show me a heatmap",
         ],
     },
+    # ---- Edge case tests (Phase 5) ----
+    "test13_live_scorecard": {
+        "name": "Test 13: Live Scorecard (LIVE subdomain)",
+        "turns": [
+            "how did my team do this gameweek?",
+            "who got bonus points?",
+        ],
+    },
+    "test14_entity_resolution": {
+        "name": "Test 14: Entity Resolution (cross-turn references)",
+        "turns": [
+            "show the league table",
+            "how does Afdal compare to Krishanth?",
+        ],
+    },
+    "test15_context_refinement": {
+        "name": "Test 15: Context Refinement (multi-turn narrowing)",
+        "turns": [
+            "show me the top 10 midfielders by total points",
+            "which of those are under 8m?",
+            "show their last 5 gameweek form",
+        ],
+    },
 }
 
 
