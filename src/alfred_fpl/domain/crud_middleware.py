@@ -57,6 +57,13 @@ UUID_FIELDS: set[str] = {
     "player_id", "player_in_id", "player_out_id",
 }
 
+# Nested select additions — auto-join related data via Supabase PostgREST.
+# Squads only have player_id FK; this embeds player stats + team/position names
+# so the Reply formatter can show a complete squad table in one read.
+NESTED_SELECTS: dict[str, str] = {
+    "squads": "players(web_name, price, form, total_points, status, news, minutes, teams(short_name), positions(short_name))",
+}
+
 # --- Per-table guardrails ---
 
 # Default row limits — prevent context flooding
@@ -204,17 +211,26 @@ class FPLMiddleware(CRUDMiddleware):
         if (params.columns is None or len(params.columns) == 0) and table in HEADLINE_COLUMNS:
             params.columns = HEADLINE_COLUMNS[table]
 
+        # 8. Auto-add nested selects (e.g., squads → players → teams/positions)
+        select_additions = []
+        if table in NESTED_SELECTS:
+            select_additions.append(NESTED_SELECTS[table])
+
         params.filters = filters
-        return ReadPreprocessResult(params=params)
+        return ReadPreprocessResult(params=params, select_additions=select_additions)
 
     # ----- post_read: enrich results after DB call -----
 
     async def post_read(
         self, records: list[dict], table: str, user_id: str
     ) -> list[dict]:
-        """Post-process read results: enrich integer FK labels + cache DataFrames."""
+        """Post-process read results: flatten nested selects + cache DataFrames."""
         if not records:
             return records
+
+        # Flatten nested select results (e.g., squads.players → top-level fields)
+        if table == "squads":
+            records = self._flatten_squad_players(records)
 
         # Stash DataFrame for ANALYZE/GENERATE steps (domain-side session cache)
         self._dataframe_cache[table] = pd.DataFrame(records)
@@ -231,6 +247,36 @@ class FPLMiddleware(CRUDMiddleware):
         self._dataframe_cache.clear()
 
     # ----- Internal helpers -----
+
+    @staticmethod
+    def _flatten_squad_players(records: list[dict]) -> list[dict]:
+        """Flatten nested players data into top-level squad record fields.
+
+        Supabase nested select returns:
+            {"slot": 1, "player_id": "...", "players": {"web_name": "Roefs", "price": 4.9, ...}}
+
+        We flatten to:
+            {"slot": 1, "player_id": "...", "web_name": "Roefs", "price": 4.9,
+             "team_name": "SUN", "position_name": "GKP", ...}
+
+        This lets format_records_for_reply show a complete squad table.
+        """
+        flattened = []
+        for r in records:
+            rec = r.copy()
+            player = rec.pop("players", None)
+            if isinstance(player, dict):
+                # Extract team/position names from double-nested data
+                teams = player.pop("teams", None)
+                positions = player.pop("positions", None)
+                if isinstance(teams, dict):
+                    rec["team_name"] = teams.get("short_name", "")
+                if isinstance(positions, dict):
+                    rec["position_name"] = positions.get("short_name", "")
+                # Merge remaining player fields (web_name, price, form, etc.)
+                rec.update(player)
+            flattened.append(rec)
+        return flattened
 
     def _translate_integer_fks(self, table: str, filters: list) -> list:
         """Translate UUID refs in filters to integer IDs for manager/league scoped tables.

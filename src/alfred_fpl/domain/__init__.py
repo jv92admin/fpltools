@@ -935,6 +935,9 @@ Structure: `{"field": "<column>", "op": "<operator>", "value": <value>}`
                 name = r.get("_player_id_label") or r.get("web_name") or r.get("player_name") or "?"
                 team = r.get("team_name", "")
                 pos = r.get("position_name", "")
+                price = r.get("price")
+                pts = r.get("total_points")
+                form = r.get("form")
                 slot = r.get("slot", 0)
                 captain = " (C)" if r.get("is_captain") else ""
                 vice = " (VC)" if r.get("is_vice_captain") else ""
@@ -946,6 +949,12 @@ Structure: `{"field": "<column>", "op": "<operator>", "value": <value>}`
                     parts.append(f"| {pos}")
                 if team:
                     parts.append(f"| {team}")
+                if price is not None:
+                    parts.append(f"| £{price}m")
+                if pts is not None:
+                    parts.append(f"| {pts}pts")
+                if form is not None:
+                    parts.append(f"| form {form}")
                 if bench:
                     parts.append(bench)
                 lines.append(" ".join(parts))
