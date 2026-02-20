@@ -93,8 +93,10 @@ _PERSONAS: dict[str, dict[str, str]] = {
     "league": {
         "read": (
             "You are reading league data. League standings have one row per "
-            "manager per GW. Filter by league_id and gameweek. "
-            "For rivalry analysis, read standings + squads for both managers. "
+            "manager per GW. Middleware auto-injects league_id — just filter "
+            "by gameweek, do NOT add league_name filters. "
+            "For rival squads, pass manager_id explicitly as an integer from "
+            "the standings data (middleware only auto-injects YOUR manager_id). "
             "Resolve human names ('Vinay') via league_standings.manager_name (ilike)."
         ),
         "analyze": (

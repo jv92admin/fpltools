@@ -181,9 +181,11 @@ GENERATE renders visual artifacts from data in context.
 5. ANALYZE: "Compute: rank captain candidates by composite of form, fixture FDR, xGI, ownership" (group 2)
 6. GENERATE (optional): bar chart of captain candidates by composite score (group 3)
 
-**Rival differential:**
-1. READ rival squad (group 0)
-2. ANALYZE: compute_differentials between user squad and rival (group 1)
+**Rival differential (league comparison):**
+1. READ league_standings for current GW, order by rank asc — identify rival's manager_id (group 0)
+2. READ squads (no manager_id filter — middleware injects yours) — your squad (group 1)
+3. READ squads with manager_id = <rival_integer_id> — rival's squad (group 1)
+4. ANALYZE: compute_differentials between user squad and rival (group 2)
 
 **Transfer replacement search:**
 1. READ squad — confirm player + bank (group 0)

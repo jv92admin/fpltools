@@ -80,10 +80,11 @@ A BI engineer on demand. The user asks an FPL question, Alfred fetches data, wri
 ## What's Next
 
 ### Phase 5: Quality Polish
-- [ ] Add price, form, total_points to squad execution summary (requires ANALYZE or second read)
-- [ ] Improve Reply integration with ANALYZE output (test4 rival comparison — blocked by rival squad data)
+- [x] Add price, form, total_points to squad display (PostgREST nested selects + flatten)
+- [x] Improve Reply integration with ANALYZE output (test4 rival comparison)
+- [x] Sync rival squad data — all 22 league members' GW26 picks synced (330 rows)
+- [x] Fix league rivalry prompts: rival manager_id explicit pass, remove league_name filters, 4-step Think pattern
 - [ ] Expand eval to cover edge cases (multi-turn memory, entity resolution across turns)
-- [ ] Consider syncing rival squad data for league comparison features
 
 ### Phase 6: UI / Artifact Display
 - [ ] Chart file path → frontend rendering (PNG display)
@@ -155,7 +156,7 @@ A BI engineer on demand. The user asks an FPL question, Alfred fetches data, wri
 | test1: Quick Squad View | 1 | READ | 17s | 15 unique players, slots 1-15 |
 | test2: Scout + Compare | 2 | READ+ANALYZE | 54s | Semenyo vs Rice, 5GW comparison |
 | test3: Fixture Analysis | 1 | READ+ANALYZE+GENERATE | 55s | FDR table + heatmap chart |
-| test4: League Rivalry | 2 | READ+ANALYZE | 42s | Standings + squad (rival data unavailable) |
+| test4: League Rivalry | 2 | READ+ANALYZE | 2060s | Standings + rival comparison (6 shared, 9 differentials) |
 | test5: Transfer Planning | 2 | READ+ANALYZE | 60s | Cheap forwards with 5GW stats |
 | test6: Market Trends | 1 | READ | 41s | Transfer-in rankings |
 | test7: Player Form | 2 | READ+ANALYZE | 87s | Top 10 MIDs + GW22-26 form trends |

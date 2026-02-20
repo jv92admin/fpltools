@@ -101,8 +101,9 @@ _CRUD_TOOLS = r"""
 
 ### FPL-Specific CRUD Rules
 
-- **Middleware auto-injects `manager_id`** on squads, transfers, manager_seasons — just read the table, don't add a manager_id filter
-- **Middleware auto-injects `league_id`** on league_standings
+- **Middleware auto-injects YOUR `manager_id`** on squads, transfers, manager_seasons — for YOUR data, don't add a manager_id filter
+- **For RIVAL data:** pass `manager_id` explicitly (integer from league_standings). Middleware only injects when NO manager_id filter is present.
+- **Middleware auto-injects `league_id`** on league_standings — do NOT filter by `league_name`, just read with gameweek filter
 - **Do NOT query `manager_links`** — it's handled by session bootstrap
 - **Column naming:** Use `price` (not `now_cost`), `gameweek` (not `event` or `week`), `player_id` (not `element`)
 - **`limit` and `columns` are TOP-LEVEL params**, not inside `filters[]`
