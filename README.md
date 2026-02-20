@@ -1,151 +1,84 @@
 # FPL Tools
 
-A Fantasy Premier League companion app focused on **content** and **execution** — helping you plan smarter and enjoy the FPL experience more.
+Data infrastructure + Alfred domain for a Fantasy Premier League BI agent. Users ask FPL questions, Alfred fetches data, writes Python, executes it, and returns tables + charts.
 
-## Project Structure
+## What's In This Repo
 
-```
-fpltools/
-├── src/                    # Core Python modules
-│   ├── config.py           # Configuration management
-│   ├── fpl_client.py       # FPL API client
-│   ├── database.py         # Supabase database client
-│   └── pipeline.py         # Data ingestion pipeline
-├── scripts/                # Runnable scripts
-│   ├── sync.py             # Main data sync script
-│   └── test_fpl_api.py     # API test script (no DB needed)
-├── sql/                    # Database migrations
-│   └── 001_initial_schema.sql
-├── references/             # Documentation & notes
-├── requirements.txt
-└── env.example             # Environment template
-```
+| Layer | What | Key Files |
+|-------|------|-----------|
+| **Data pipeline** | FPL API → Supabase (14 tables, UUID FKs) | `src/pipeline.py`, `sql/001_schema.sql` |
+| **Domain scaffold** | DomainConfig for Alfred (23 methods, 6 subdomains, 15 entities) | `src/alfred_fpl/domain/` |
+| **BI library** | Pandas analytics, matplotlib charts, sandboxed Python executor | `src/alfred_fpl/bi/` |
+| **Custom tools** | `fpl_analyze` + `fpl_plot` registered via alfredagain 2.1.0 | `src/alfred_fpl/domain/__init__.py` |
 
 ## Quick Start
 
-### 1. Clone & Setup
-
 ```bash
+# Clone and setup
 git clone https://github.com/jv92admin/fpltools.git
 cd fpltools
-
-# Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -e ".[dev]"
 
-# Install dependencies
-pip install -r requirements.txt
+# Configure
+cp .env.example .env
+# Edit .env: SUPABASE_URL, SUPABASE_KEY
+
+# Test (no Supabase needed)
+pytest tests/ -v              # 111 tests
+
+# Sync data
+python scripts/sync.py --test       # verify connections
+python scripts/sync.py --bootstrap  # sync reference data
+python scripts/sync.py --gw 25     # sync a specific gameweek
 ```
-
-### 2. Configure Environment
-
-```bash
-# Copy template
-cp env.example .env
-
-# Edit .env with your values:
-# - SUPABASE_URL: From Supabase dashboard > Settings > API
-# - SUPABASE_KEY: The "anon public" key
-# - FPL_DEFAULT_LEAGUE_ID: Your mini-league ID (from FPL URL)
-# - FPL_DEFAULT_MANAGER_ID: Your manager ID (optional, for testing)
-```
-
-> **Note:** The FPL_DEFAULT_* variables are development defaults. In a production 
-> app with users, these would be stored per-user in the database.
-
-### 3. Setup Database
-
-1. Create a new project in [Supabase](https://supabase.com)
-2. Go to SQL Editor
-3. Run the contents of `sql/001_initial_schema.sql`
-
-### 4. Test Connection
-
-```bash
-# Test FPL API (no database needed)
-python scripts/test_fpl_api.py
-
-# Test full connection (FPL + Supabase)
-python scripts/sync.py --test
-```
-
-### 5. Run Sync
-
-```bash
-# Full sync (bootstrap + current gameweek)
-python scripts/sync.py
-
-# Bootstrap only (players, teams, fixtures)
-python scripts/sync.py --bootstrap
-
-# Specific gameweek
-python scripts/sync.py --gameweek 15
-```
-
-## For Collaborators
-
-Once you have access to the Supabase project:
-
-1. Get the credentials from the project owner
-2. Add them to your `.env` file
-3. You can now query the database directly:
-   - Via Supabase dashboard (SQL Editor)
-   - Via Python (`src/database.py`)
-   - Via Supabase REST API
-
-The data pipeline runs on one machine and pushes to Supabase. Everyone queries the same data.
 
 ## Data Model
 
-### Dimension Tables (Reference Data)
-- `dim_teams` — 20 Premier League clubs
-- `dim_positions` — GK, DEF, MID, FWD
-- `dim_gameweeks` — 38 gameweeks per season
-- `dim_players` — ~700 players with current stats
+### Reference Tables
+- `teams` — 20 Premier League clubs
+- `positions` — GKP, DEF, MID, FWD
+- `gameweeks` — 38 gameweeks per season
+- `players` — ~700 players with current stats
+- `leagues` — Mini-leagues
 
-### Fact Tables (Time-Series Data)
-- `fact_player_gw` — Player stats per gameweek
-- `fact_fixtures` — Match results
-- `fact_manager_picks` — Manager team selections
-- `fact_league_standings` — League snapshots over time
+### Fact Tables
+- `fixtures` — Match results and FDR ratings
+- `player_gameweeks` — Player stats per gameweek
+- `player_snapshots` — Price/ownership snapshots over time
+- `squads` — Manager team selections (15 slots per GW)
+- `transfers` — Historical transfers
+- `manager_seasons` — GW-by-GW manager progression
+- `league_standings` — League table snapshots
 
-## API Reference
+### User-Owned Tables (RLS)
+- `manager_links` — Links auth users to FPL manager IDs
+- `watchlist` — Player watchlist
+- `transfer_plans` — Planned transfers
 
-### FPL Endpoints Used
+## Architecture
 
-| Endpoint | Description | Rate |
-|----------|-------------|------|
-| `bootstrap-static/` | All players, teams, gameweeks | Cache for hours |
-| `event/{gw}/live/` | Live stats for all players | Per gameweek |
-| `fixtures/` | All fixtures | Cache for hours |
-| `entry/{id}/` | Manager profile | Per manager |
-| `entry/{id}/event/{gw}/picks/` | Manager picks | Per manager/GW |
-| `leagues-classic/{id}/standings/` | League standings | Paginated |
+See [docs/architecture/overview.md](docs/architecture/overview.md) for the full system diagram.
 
-### Top Managers
-
-To get top X managers from the overall league:
-
-```python
-from src.fpl_client import FPLClient
-
-client = FPLClient()
-top_100 = client.get_top_managers(100)
-top_10k = client.get_top_managers(10000)  # ~200 API calls, rate limited
+```
+User question → Alfred Core (UNDERSTAND → THINK → ACT → REPLY)
+                  │
+                  ├── READ: db_read → CRUD middleware → Supabase
+                  ├── ANALYZE: fpl_analyze → sandboxed executor → pandas
+                  └── GENERATE: fpl_plot → sandboxed executor → matplotlib → PNG
 ```
 
-## Development
+## Documentation
 
-```bash
-# Run tests
-pytest
-
-# Lint
-pip install ruff
-ruff check src/
-```
+| Doc | Purpose |
+|-----|---------|
+| [Architecture Overview](docs/architecture/overview.md) | System diagram, data flow, doc map |
+| [Domain Integration](docs/architecture/domain-integration.md) | DomainConfig, custom tools, middleware |
+| [BI Execution](docs/architecture/bi-execution.md) | Executor, analytics, visualization |
+| [Roadmap](docs/roadmap.md) | Current phase and what's next |
+| [FPL API Reference](docs/reference/fpl-api.md) | FPL API endpoints and response shapes |
 
 ## License
 
 MIT
-

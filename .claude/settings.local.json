@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(python -c:*)",
+      "Bash(python scripts/sync.py:*)",
+      "Bash(python scripts/test_fpl_api.py:*)",
+      "Bash(python scripts/seed_demo.py:*)",
+      "Bash(grep:*)",
+      "Bash(pip install:*)",
+      "Bash(python -m pytest:*)",
+      "Bash(xargs:*)",
+      "Bash(pip show:*)",
+      "Bash(git mv:*)"
+    ]
+  }
+}
