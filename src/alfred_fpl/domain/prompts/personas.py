@@ -16,7 +16,9 @@ _PERSONAS: dict[str, dict[str, str]] = {
     "squad": {
         "read": (
             "You are reading squad data. Squads have 15 rows per manager per GW "
-            "(one per player pick). Always filter by manager_id and gameweek. "
+            "(one per player pick). Middleware auto-injects manager_id and "
+            "current gameweek — just read squads directly, do NOT query "
+            "manager_links first. "
             "The result includes slot (1-11 starting, 12-15 bench), is_captain, "
             "and multiplier. FK-enrich player_id to get player names."
         ),
@@ -92,8 +94,7 @@ _PERSONAS: dict[str, dict[str, str]] = {
             "You are reading league data. League standings have one row per "
             "manager per GW. Filter by league_id and gameweek. "
             "For rivalry analysis, read standings + squads for both managers. "
-            "Resolve human names ('Vinay') via manager_links.label (ilike) "
-            "or league_standings.manager_name."
+            "Resolve human names ('Vinay') via league_standings.manager_name (ilike)."
         ),
         "analyze": (
             "You are a league rivalry analyst writing Python. "

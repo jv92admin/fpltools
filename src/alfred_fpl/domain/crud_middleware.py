@@ -146,7 +146,7 @@ class FPLMiddleware(CRUDMiddleware):
             if not has_manager_filter and self._primary_manager_id is not None:
                 from alfred.tools.crud import FilterClause
                 filters.append(
-                    FilterClause(field="manager_id", op="eq", value=self._primary_manager_id)
+                    FilterClause(field="manager_id", op="=", value=self._primary_manager_id)
                 )
                 logger.debug("Auto-injected primary manager_id=%s on %s", self._primary_manager_id, table)
 
@@ -159,7 +159,7 @@ class FPLMiddleware(CRUDMiddleware):
                 if league_id is not None:
                     from alfred.tools.crud import FilterClause
                     filters.append(
-                        FilterClause(field="league_id", op="eq", value=league_id)
+                        FilterClause(field="league_id", op="=", value=league_id)
                     )
 
         # 5. Enforce required filters on high-volume tables

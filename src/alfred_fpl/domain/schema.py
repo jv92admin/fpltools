@@ -5,169 +5,341 @@ our Supabase instance does not have the get_table_columns RPC, so these schemas
 are the only way Act prompts know what columns exist. Every column name, type,
 and comment here directly affects whether the LLM writes correct queries and
 correct Python code in ANALYZE steps.
+
+CRITICAL: FALLBACK_SCHEMAS must be keyed by SUBDOMAIN name (not table name).
+Alfred-core calls `get_fallback_schemas().get(subdomain)` — if keys are table
+names, the lookup returns None and the LLM gets "*Schema unavailable*" for
+every table.
 """
 
 # ---------------------------------------------------------------------------
 # Fallback schemas — the LLM's view of the database
 #
-# Format: table_name → human-readable column listing
-# These are injected into Act prompts when the LLM needs to construct queries
-# or write Python code. Include column semantics (not just types) because the
-# LLM writing pandas code needs to know "price is in millions" not just
-# "price is decimal".
+# Format: subdomain_name → full markdown with table schemas for that subdomain.
+# Alfred-core calls get_fallback_schemas().get(subdomain) in
+# alfred.tools.schema.get_schema_with_fallback().
+#
+# Each subdomain includes all tables from SUBDOMAIN_REGISTRY[subdomain].
+# Use markdown tables (| Column | Type | Notes |) for LLM readability.
 # ---------------------------------------------------------------------------
 
+# -- Shared table blocks (reused across subdomains) --
+
+_PLAYERS_SCHEMA = """\
+### players
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid | PK |
+| fpl_id | integer | FPL API element ID |
+| web_name | text | Display name e.g. 'Salah' |
+| first_name | text | |
+| second_name | text | |
+| team_id | uuid | FK → teams.id |
+| position_id | uuid | FK → positions.id |
+| price | decimal | Current price in **millions** (13.2 = £13.2m) |
+| total_points | integer | Season total |
+| selected_by_percent | decimal | Ownership % (45.2 = 45.2%) |
+| status | text | a=available, i=injured, d=doubtful, s=suspended, u=unavailable |
+| news | text | Injury/suspension details |
+| form | decimal | Recent form rating (rolling avg) |
+| points_per_game | decimal | Season average PPG |
+| minutes | integer | Total minutes played |
+| goals_scored | integer | |
+| assists | integer | |
+| clean_sheets | integer | |
+| bonus | integer | Total bonus points |"""
+
+_TEAMS_SCHEMA = """\
+### teams
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid | PK |
+| fpl_id | integer | FPL API team ID |
+| name | text | Full name e.g. 'Arsenal' |
+| short_name | text | 3-letter code e.g. 'ARS' |
+| code | integer | FPL internal code |"""
+
+_POSITIONS_SCHEMA = """\
+### positions
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid | PK |
+| fpl_id | integer | FPL API position ID |
+| name | text | e.g. 'Goalkeeper' |
+| short_name | text | GKP, DEF, MID, FWD |"""
+
+_GAMEWEEKS_SCHEMA = """\
+### gameweeks
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid | PK |
+| fpl_id | integer | GW number 1-38 |
+| name | text | e.g. 'Gameweek 25' |
+| deadline_time | timestamptz | Transfer deadline |
+| is_current | boolean | |
+| is_next | boolean | |
+| finished | boolean | |
+| average_score | integer | GW average points |
+| highest_score | integer | GW top score |"""
+
+_FIXTURES_SCHEMA = """\
+### fixtures
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid | PK |
+| fpl_id | integer | |
+| gameweek | integer | GW number (NULL if unscheduled) |
+| home_team_id | uuid | FK → teams.id |
+| away_team_id | uuid | FK → teams.id |
+| home_score | integer | NULL if not played |
+| away_score | integer | NULL if not played |
+| kickoff_time | timestamptz | |
+| finished | boolean | |
+| home_difficulty | integer | FDR 1-5 (1=easiest for home team) |
+| away_difficulty | integer | FDR 1-5 (1=easiest for away team) |"""
+
+_SQUADS_SCHEMA = """\
+### squads
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid | PK |
+| manager_id | integer | FPL manager ID (NOT a UUID) |
+| manager_name | text | |
+| gameweek | integer | |
+| player_id | uuid | FK → players.id |
+| slot | integer | 1-11=starting XI, 12-15=bench |
+| multiplier | integer | 0=benched, 1=playing, 2=captain, 3=triple-captain |
+| is_captain | boolean | |
+| is_vice_captain | boolean | |"""
+
+_PLAYER_GAMEWEEKS_SCHEMA = """\
+### player_gameweeks
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid | PK |
+| player_id | uuid | FK → players.id |
+| gameweek | integer | GW number |
+| minutes | integer | |
+| goals_scored | integer | |
+| assists | integer | |
+| clean_sheets | integer | |
+| goals_conceded | integer | |
+| saves | integer | |
+| bonus | integer | 0-3 |
+| bps | integer | Raw Bonus Points System score |
+| influence | decimal | |
+| creativity | decimal | |
+| threat | decimal | |
+| ict_index | decimal | Composite ICT |
+| expected_goals | decimal | xG |
+| expected_assists | decimal | xA |
+| expected_goal_involvements | decimal | xGI = xG + xA |
+| expected_goals_conceded | decimal | xGC |
+| total_points | integer | Points scored this GW |
+| in_dreamteam | boolean | |
+| value | decimal | Player price at that GW in millions |"""
+
+_PLAYER_SNAPSHOTS_SCHEMA = """\
+### player_snapshots
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid | PK |
+| player_id | uuid | FK → players.id |
+| snapshot_time | timestamptz | |
+| gameweek | integer | GW number |
+| transfers_in_event | integer | Transfers in this GW |
+| transfers_out_event | integer | Transfers out this GW |
+| selected_by_percent | decimal | Ownership % |
+| price | decimal | Price in millions |
+| form | decimal | |
+| points_per_game | decimal | |"""
+
+_MANAGER_SEASONS_SCHEMA = """\
+### manager_seasons
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid | PK |
+| manager_id | integer | FPL manager ID (NOT a UUID) |
+| manager_name | text | |
+| gameweek | integer | |
+| points | integer | GW points |
+| total_points | integer | Cumulative |
+| rank | integer | GW rank |
+| overall_rank | integer | |
+| percentile_rank | integer | |
+| bank | decimal | Transfer budget in millions |
+| team_value | decimal | Squad value in millions |
+| transfers_made | integer | |
+| transfers_cost | integer | Hit points taken |
+| points_on_bench | integer | |
+| chip_used | text | NULL or: wildcard, bboost, 3xc, freehit |"""
+
+_MANAGER_LINKS_SCHEMA = """\
+### manager_links
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid | PK |
+| user_id | uuid | FK → auth.users (auto-scoped by RLS) |
+| fpl_manager_id | integer | The FPL API manager ID |
+| is_primary | boolean | true = user's own team |
+| label | text | Display name e.g. 'Vinay' or 'My Team' |
+| league_id | integer | Optional league association |"""
+
+_LEAGUE_STANDINGS_SCHEMA = """\
+### league_standings
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid | PK |
+| league_id | integer | FPL league ID (NOT a UUID) |
+| league_name | text | |
+| gameweek | integer | |
+| manager_id | integer | FPL manager ID (NOT a UUID) |
+| manager_name | text | |
+| team_name | text | |
+| rank | integer | |
+| last_rank | integer | Previous GW rank |
+| total_points | integer | |
+| event_points | integer | This GW only |"""
+
+_LEAGUES_SCHEMA = """\
+### leagues
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid | PK |
+| fpl_id | integer | FPL API league ID |
+| name | text | Mini-league name |"""
+
+_TRANSFERS_SCHEMA = """\
+### transfers
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid | PK |
+| manager_id | integer | FPL manager ID (NOT a UUID) |
+| manager_name | text | |
+| gameweek | integer | |
+| player_in_id | uuid | FK → players.id |
+| player_out_id | uuid | FK → players.id |
+| price_in | decimal | Millions |
+| price_out | decimal | Millions |
+| transfer_time | timestamptz | |"""
+
+_WATCHLIST_SCHEMA = """\
+### watchlist
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid | PK |
+| user_id | uuid | FK → auth.users (auto-scoped by RLS) |
+| player_id | uuid | FK → players.id |
+| notes | text | User's notes on this player |
+| created_at | timestamptz | |"""
+
+_TRANSFER_PLANS_SCHEMA = """\
+### transfer_plans
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid | PK |
+| user_id | uuid | FK → auth.users (auto-scoped by RLS) |
+| manager_id | integer | FPL manager ID |
+| gameweek | integer | Planned GW for transfer |
+| player_in_id | uuid | FK → players.id |
+| player_out_id | uuid | FK → players.id |
+| price_in | decimal | Millions |
+| price_out | decimal | Millions |
+| created_at | timestamptz | |"""
+
+
+# -- Subdomain-keyed fallback schemas --
+
 FALLBACK_SCHEMAS: dict[str, str] = {
-    # --- Dimension tables ---
-    "positions": (
-        "id (uuid PK), fpl_id (int, FPL API position ID), "
-        "name (text, e.g. 'Goalkeeper'), short_name (text, e.g. 'GKP')"
-    ),
-    "teams": (
-        "id (uuid PK), fpl_id (int, FPL API team ID), "
-        "name (text, full name e.g. 'Arsenal'), "
-        "short_name (text, 3-letter code e.g. 'ARS'), "
-        "code (int, FPL internal code)"
-    ),
-    "gameweeks": (
-        "id (uuid PK), fpl_id (int, GW number 1-38), "
-        "name (text, e.g. 'Gameweek 25'), "
-        "deadline_time (timestamptz, transfer deadline), "
-        "is_current (bool), is_next (bool), finished (bool), "
-        "average_score (int, GW average points), "
-        "highest_score (int, GW top score)"
-    ),
-    "leagues": (
-        "id (uuid PK), fpl_id (int, FPL API league ID), "
-        "name (text, mini-league name)"
-    ),
-    "players": (
-        "id (uuid PK), fpl_id (int, FPL API element ID), "
-        "web_name (text, display name e.g. 'Salah'), "
-        "first_name (text), second_name (text), "
-        "team_id (uuid FK → teams.id), "
-        "position_id (uuid FK → positions.id), "
-        "price (decimal, current price in millions e.g. 13.2), "
-        "total_points (int, season total), "
-        "selected_by_percent (decimal, ownership % e.g. 45.2), "
-        "status (text, one of: a=available, i=injured, d=doubtful, s=suspended, u=unavailable), "
-        "news (text, injury/suspension details), "
-        "form (decimal, recent form rating), "
-        "points_per_game (decimal, season avg PPG), "
-        "minutes (int, total minutes played), "
-        "goals_scored (int), assists (int), "
-        "clean_sheets (int), bonus (int, total bonus points)"
-    ),
-    # --- Fact / reference tables ---
-    "fixtures": (
-        "id (uuid PK), fpl_id (int), "
-        "gameweek (int, GW number — NULL if unscheduled), "
-        "home_team_id (uuid FK → teams.id), "
-        "away_team_id (uuid FK → teams.id), "
-        "home_score (int, NULL if not played), "
-        "away_score (int, NULL if not played), "
-        "kickoff_time (timestamptz), "
-        "finished (bool), "
-        "home_difficulty (int, FDR 1-5 where 1=easiest), "
-        "away_difficulty (int, FDR 1-5 where 1=easiest)"
-    ),
-    "player_gameweeks": (
-        "id (uuid PK), "
-        "player_id (uuid FK → players.id), "
-        "gameweek (int, GW number), "
-        "minutes (int), goals_scored (int), assists (int), "
-        "clean_sheets (int), goals_conceded (int), saves (int), "
-        "bonus (int, 0-3), bps (int, raw bonus points system score), "
-        "influence (decimal), creativity (decimal), threat (decimal), "
-        "ict_index (decimal, composite ICT), "
-        "expected_goals (decimal, xG), expected_assists (decimal, xA), "
-        "expected_goal_involvements (decimal, xGI), "
-        "expected_goals_conceded (decimal, xGC), "
-        "total_points (int, points scored this GW), "
-        "in_dreamteam (bool), "
-        "value (decimal, player price at that GW in millions)"
-    ),
-    "player_snapshots": (
-        "id (uuid PK), "
-        "player_id (uuid FK → players.id), "
-        "snapshot_time (timestamptz), "
-        "gameweek (int), "
-        "transfers_in_event (int, transfers in this GW), "
-        "transfers_out_event (int, transfers out this GW), "
-        "selected_by_percent (decimal, ownership %), "
-        "price (decimal, price in millions), "
-        "form (decimal), points_per_game (decimal)"
-    ),
-    # --- Manager subview tables (integer manager_id, not UUID) ---
-    "squads": (
-        "id (uuid PK), "
-        "manager_id (int, FPL manager ID — NOT a UUID), "
-        "manager_name (text), "
-        "gameweek (int), "
-        "player_id (uuid FK → players.id), "
-        "slot (int, 1-11=starting XI, 12-15=bench), "
-        "multiplier (int, 0=benched 1=playing 2=captain 3=triple-captain), "
-        "is_captain (bool), is_vice_captain (bool)"
-    ),
-    "transfers": (
-        "id (uuid PK), "
-        "manager_id (int, FPL manager ID — NOT a UUID), "
-        "manager_name (text), "
-        "gameweek (int), "
-        "player_in_id (uuid FK → players.id), "
-        "player_out_id (uuid FK → players.id), "
-        "price_in (decimal, millions), price_out (decimal, millions), "
-        "transfer_time (timestamptz)"
-    ),
-    "manager_seasons": (
-        "id (uuid PK), "
-        "manager_id (int, FPL manager ID — NOT a UUID), "
-        "manager_name (text), "
-        "gameweek (int), "
-        "points (int, GW points), total_points (int, cumulative), "
-        "rank (int, GW rank), overall_rank (int), percentile_rank (int), "
-        "bank (decimal, transfer budget in millions), "
-        "team_value (decimal, squad value in millions), "
-        "transfers_made (int), transfers_cost (int, hit points taken), "
-        "points_on_bench (int), "
-        "chip_used (text, NULL or one of: wildcard/bboost/3xc/freehit)"
-    ),
-    "league_standings": (
-        "id (uuid PK), "
-        "league_id (int, FPL league ID — NOT a UUID), "
-        "league_name (text), "
-        "gameweek (int), "
-        "manager_id (int, FPL manager ID — NOT a UUID), "
-        "manager_name (text), team_name (text), "
-        "rank (int), last_rank (int, previous GW rank), "
-        "total_points (int), event_points (int, this GW only)"
-    ),
-    # --- User-owned tables (RLS-protected) ---
-    "manager_links": (
-        "id (uuid PK), "
-        "user_id (uuid FK → auth.users, auto-scoped by RLS), "
-        "fpl_manager_id (int, the FPL API manager ID), "
-        "is_primary (bool, true = this is the user's own team), "
-        "label (text, display name e.g. 'Vinay' or 'My Team'), "
-        "league_id (int, optional league association)"
-    ),
-    "watchlist": (
-        "id (uuid PK), "
-        "user_id (uuid FK → auth.users, auto-scoped by RLS), "
-        "player_id (uuid FK → players.id), "
-        "notes (text, user's notes on this player), "
-        "created_at (timestamptz)"
-    ),
-    "transfer_plans": (
-        "id (uuid PK), "
-        "user_id (uuid FK → auth.users, auto-scoped by RLS), "
-        "manager_id (int, FPL manager ID), "
-        "gameweek (int, planned GW for transfer), "
-        "player_in_id (uuid FK → players.id), "
-        "player_out_id (uuid FK → players.id), "
-        "price_in (decimal, millions), price_out (decimal, millions), "
-        "created_at (timestamptz)"
-    ),
+    "squad": f"""## Available Tables (subdomain: squad)
+
+{_SQUADS_SCHEMA}
+
+{_PLAYERS_SCHEMA}
+
+{_TEAMS_SCHEMA}
+
+{_POSITIONS_SCHEMA}
+
+{_GAMEWEEKS_SCHEMA}
+
+{_MANAGER_SEASONS_SCHEMA}
+""",
+
+    "scouting": f"""## Available Tables (subdomain: scouting)
+
+{_PLAYERS_SCHEMA}
+
+{_TEAMS_SCHEMA}
+
+{_POSITIONS_SCHEMA}
+
+{_PLAYER_GAMEWEEKS_SCHEMA}
+
+{_PLAYER_SNAPSHOTS_SCHEMA}
+
+{_FIXTURES_SCHEMA}
+
+{_GAMEWEEKS_SCHEMA}
+
+{_WATCHLIST_SCHEMA}
+""",
+
+    "market": f"""## Available Tables (subdomain: market)
+
+{_PLAYER_SNAPSHOTS_SCHEMA}
+
+{_PLAYERS_SCHEMA}
+
+{_TEAMS_SCHEMA}
+
+{_TRANSFERS_SCHEMA}
+
+{_TRANSFER_PLANS_SCHEMA}
+
+{_MANAGER_SEASONS_SCHEMA}
+""",
+
+    "league": f"""## Available Tables (subdomain: league)
+
+{_LEAGUE_STANDINGS_SCHEMA}
+
+{_LEAGUES_SCHEMA}
+
+{_SQUADS_SCHEMA}
+
+{_MANAGER_SEASONS_SCHEMA}
+
+{_PLAYERS_SCHEMA}
+
+{_TEAMS_SCHEMA}
+
+{_GAMEWEEKS_SCHEMA}
+""",
+
+    "live": f"""## Available Tables (subdomain: live)
+
+{_PLAYER_GAMEWEEKS_SCHEMA}
+
+{_SQUADS_SCHEMA}
+
+{_PLAYERS_SCHEMA}
+
+{_TEAMS_SCHEMA}
+
+{_FIXTURES_SCHEMA}
+
+{_GAMEWEEKS_SCHEMA}
+""",
+
+    "fixtures": f"""## Available Tables (subdomain: fixtures)
+
+{_FIXTURES_SCHEMA}
+
+{_TEAMS_SCHEMA}
+
+{_GAMEWEEKS_SCHEMA}
+""",
 }
 
 
@@ -179,7 +351,7 @@ SUBDOMAIN_REGISTRY: dict[str, dict] = {
     "squad": {
         "tables": [
             "squads", "players", "teams", "positions",
-            "gameweeks", "manager_seasons", "manager_links",
+            "gameweeks", "manager_seasons",
         ],
     },
     "scouting": {
@@ -197,13 +369,13 @@ SUBDOMAIN_REGISTRY: dict[str, dict] = {
     "league": {
         "tables": [
             "league_standings", "leagues", "squads", "manager_seasons",
-            "players", "teams", "gameweeks", "manager_links",
+            "players", "teams", "gameweeks",
         ],
     },
     "live": {
         "tables": [
             "player_gameweeks", "squads", "players", "teams",
-            "fixtures", "gameweeks", "manager_links",
+            "fixtures", "gameweeks",
         ],
     },
     "fixtures": {
@@ -219,7 +391,9 @@ SUBDOMAIN_REGISTRY: dict[str, dict] = {
 SUBDOMAIN_EXAMPLES: dict[str, str] = {
     "squad": (
         '## Squad examples\n'
-        'User: "show my team" → db_read on squads, filter manager_id + current GW\n'
+        '**Note:** Middleware auto-injects manager_id on squads reads. '
+        'Just read squads directly — do NOT query manager_links first.\n\n'
+        'User: "show my team" → db_read on squads (middleware adds manager_id automatically)\n'
         'User: "who\'s my captain?" → db_read on squads, filter is_captain eq true\n'
         'User: "show my bench" → db_read on squads, filter slot gte 12'
     ),
@@ -233,8 +407,13 @@ SUBDOMAIN_EXAMPLES: dict[str, str] = {
     ),
     "market": (
         '## Market examples\n'
+        '**Note:** Transfer velocity (most transferred-in/out) is in the '
+        '`player_snapshots` table (transfers_in_event, transfers_out_event columns). '
+        'There is NO `player_transfers` table.\n\n'
+        'User: "most transferred-in players" → db_read on player_snapshots, '
+        'filter gameweek eq current, order transfers_in_event desc, limit 10\n'
         'User: "what transfers has Vinay made?" → db_read on transfers, '
-        'filter manager_id (resolve Vinay via manager_links or league_standings)\n'
+        'filter manager_id\n'
         'User: "who should I transfer in for Haaland?" → db_read squad + players + fixtures, '
         'ANALYZE to rank replacements by form + fixtures + value'
     ),

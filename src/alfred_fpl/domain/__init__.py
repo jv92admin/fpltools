@@ -451,11 +451,15 @@ class FPLConfig(DomainConfig):
             "wildcard": "market", "free hit": "market",
             "mini-league": "league", "mini league": "league",
             "rival": "league", "rivals": "league", "standings": "league",
+            "league_standings": "league", "league standings": "league",
             "h2h": "league", "head to head": "league",
             "differential": "league", "differentials": "league",
             "gameweek": "live", "gw": "live", "points": "live",
             "bonus": "live", "bps": "live", "autosub": "live",
             "live": "live", "score": "live",
+            "squads": "squad", "manager_seasons": "squad",
+            "player_gameweeks": "scouting", "player_snapshots": "market",
+            "player_transfers": "market", "transfers_in": "market",
             "fixture": "fixtures", "match": "fixtures",
             "matches": "fixtures", "fdr": "fixtures",
             "blank": "fixtures", "double": "fixtures",
@@ -505,6 +509,30 @@ class FPLConfig(DomainConfig):
             from alfred_fpl.domain.crud_middleware import FPLMiddleware
             self._middleware = FPLMiddleware()
         return self._middleware
+
+    # =========================================================================
+    # Prompt overrides — domain-specific Think, Understand, Reply guidance
+    # =========================================================================
+
+    def get_understand_prompt_content(self) -> str:
+        from alfred_fpl.domain.prompts.understand_content import UNDERSTAND_PROMPT_CONTENT
+        return UNDERSTAND_PROMPT_CONTENT
+
+    def get_think_domain_context(self) -> str:
+        from alfred_fpl.domain.prompts.think_injections import THINK_DOMAIN_CONTEXT
+        return THINK_DOMAIN_CONTEXT
+
+    def get_think_planning_guide(self) -> str:
+        from alfred_fpl.domain.prompts.think_injections import THINK_PLANNING_GUIDE
+        return THINK_PLANNING_GUIDE
+
+    def get_act_prompt_content(self, step_type: str) -> str:
+        from alfred_fpl.domain.prompts.act_content import get_act_content
+        return get_act_content(step_type)
+
+    def get_reply_prompt_content(self) -> str:
+        from alfred_fpl.domain.prompts.reply_content import REPLY_PROMPT_CONTENT
+        return REPLY_PROMPT_CONTENT
 
     def get_system_prompt(self) -> str:
         prompt_path = Path(__file__).parent / "prompts" / "system.md"
@@ -786,6 +814,19 @@ class FPLConfig(DomainConfig):
                 if uuid_id and lid is not None:
                     league_bridge[uuid_id] = lid
 
+            # Fallback: if no manager_links found (e.g., RLS blocks anon key),
+            # use dev defaults from settings so squad scoping still works.
+            if primary_manager_id is None:
+                from alfred_fpl.config import settings as _s
+                if _s.fpl_default_manager_id:
+                    primary_manager_id = _s.fpl_default_manager_id
+                    logger.info(
+                        "No manager_links found; falling back to fpl_default_manager_id=%s",
+                        primary_manager_id,
+                    )
+                if _s.fpl_default_league_id and not league_bridge:
+                    league_bridge["_default"] = _s.fpl_default_league_id
+
             self.get_crud_middleware().set_bridges(
                 manager_bridge, league_bridge, primary_manager_id
             )
@@ -814,7 +855,13 @@ class FPLConfig(DomainConfig):
                         f"(FPL ID: {mgr.get('fpl_manager_id', '?')})"
                     )
             else:
-                lines.extend(["", "No FPL managers linked yet."])
+                if primary_manager_id is not None:
+                    lines.extend([
+                        "", "### Linked Managers",
+                        f"- My Team (PRIMARY) (FPL ID: {primary_manager_id})",
+                    ])
+                else:
+                    lines.extend(["", "No FPL managers linked yet."])
 
             return "\n".join(lines)
         except Exception as e:

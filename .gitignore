@@ -55,6 +55,8 @@ Thumbs.db
 # Logs
 *.log
 logs/
+prompt_logs/
+session_logs/
 
 nul
 .ipynb_checkpoints/
