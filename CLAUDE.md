@@ -46,8 +46,8 @@ Alfred Core (`alfredagain` on PyPI, imported as `alfred`) is the orchestration e
 - `docs/decisions/handoff-core-reply.md` — Core PM reply: ships get_custom_tools() in alfredagain 2.1.0
 - `docs/roadmap.md` — Current roadmap and milestones
 
-### Tests (111 total)
-- `tests/test_domain.py` — 25 domain contract tests
+### Tests (117 total)
+- `tests/test_domain.py` — 31 domain contract + example routing tests
 - `tests/test_bi_analytics.py` — 17 analytics function tests
 - `tests/test_bi_viz.py` — 8 chart rendering tests
 - `tests/test_bi_schemas.py` — 9 Pandera validation tests

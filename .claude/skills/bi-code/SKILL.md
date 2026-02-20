@@ -60,10 +60,23 @@ print(top[["web_name", "team", "price", "form", "total_points"]].to_string(index
 
 ### Pattern: Rolling form with chart
 ```python
-# Context: df_pgw (player_gameweeks for specific players)
-df_pgw = add_rolling_mean(df_pgw, "total_points", window=3, group_by="player_id")
-render_line(df=df_pgw, x="gameweek", y="total_points_rolling_3", hue="player_name",
+# Context: df_player_gameweeks (enriched with player_name)
+df = add_rolling_mean(df_player_gameweeks, "total_points", window=3, group_by="player_id")
+render_line(df=df, x="gameweek", y="total_points_rolling_3", hue="player_name",
     title="3-GW Rolling Points")
+```
+
+### Pattern: Fixture difficulty heatmap
+```python
+# Context: df_fixtures (enriched with home_team_name, away_team_name)
+# Unstack home/away into rows, then pivot to team × GW grid
+home = df_fixtures[['home_team_name', 'gameweek', 'home_difficulty']].rename(
+    columns={'home_team_name': 'team', 'home_difficulty': 'difficulty'})
+away = df_fixtures[['away_team_name', 'gameweek', 'away_difficulty']].rename(
+    columns={'away_team_name': 'team', 'away_difficulty': 'difficulty'})
+all_rows = pd.concat([home, away])
+pivot = all_rows.pivot_table(index='team', columns='gameweek', values='difficulty', aggfunc='mean')
+render_heatmap(pivot, title='Fixture Difficulty', cmap='RdYlGn_r', vmin=1, vmax=5)
 ```
 
 ### Pattern: Squad differentials
@@ -89,6 +102,18 @@ render_bar(df=top_value, x="web_name", y="pts_per_m", title="Best Value Players"
 - **fixtures**: id, gameweek, home_team_id, away_team_id, home_score, away_score, kickoff_time, finished, home_difficulty (FDR 1-5), away_difficulty
 - **squads**: id, manager_id (INT), gameweek, player_id, slot (1-15), multiplier (0-3), is_captain, is_vice_captain
 - **player_snapshots**: id, player_id, gameweek, price, selected_by_percent, form, transfers_in_event, transfers_out_event
+
+## Enriched DataFrame Columns (runtime)
+
+When DataFrames are loaded for executor code (via `fpl_analyze`/`fpl_plot`), they are **enriched** with human-readable names by `_enrich_dataframes()`. Use these columns in executor code, NOT the raw FK columns.
+
+| DataFrame | Enriched columns | Source |
+|-----------|-----------------|--------|
+| `df_fixtures` | `home_team_name`, `away_team_name` | UUID team_id → team short_name via team map |
+| `df_player_gameweeks` | `player_name` | UUID player_id → web_name via players cache |
+| `df_player_snapshots` | `player_name` | UUID player_id → web_name via players cache |
+
+**CRITICAL:** Use `home_team_name` / `away_team_name` (NOT `_home_team_id_label` or `home_team_id`). Use `player_name` (NOT `player_id`) for display. The enrichment happens automatically — you don't need to join manually.
 
 When generating code for $ARGUMENTS:
 1. Identify which tables/views are needed

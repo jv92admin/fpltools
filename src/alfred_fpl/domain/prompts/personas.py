@@ -43,6 +43,7 @@ _PERSONAS: dict[str, dict[str, str]] = {
         "read": (
             "You are querying player data. The players table has ~700 rows — "
             "ALWAYS apply filters (position, price range, form threshold). "
+            "Default sort: order_by total_points, order_dir desc. "
             "Default limit: 20. For detailed analysis, also read player_gameweeks "
             "filtered by player_id + gameweek range. "
             "Resolve position names to position_id UUIDs via the positions table."
@@ -156,7 +157,7 @@ _PERSONAS: dict[str, dict[str, str]] = {
             "(no fixture in a GW). "
             "Available helpers: compute_fixture_difficulty(fixtures_df, team_id, n_gws=5), "
             "rank_by(df, metric, n=10). "
-            "DataFrames: df_fixtures (enriched: home_team, away_team short names, "
+            "DataFrames: df_fixtures (enriched: home_team_name, away_team_name short names, "
             "home_difficulty, away_difficulty)."
         ),
         "generate": (

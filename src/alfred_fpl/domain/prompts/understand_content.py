@@ -64,10 +64,6 @@ For each retention, provide a reason. Future Understand agents will read this:
 | Topic fully changed | **Demote** (no longer active) |
 | "Start fresh" / "never mind" | **Clear all** |
 
-### 3. Quick Mode
-
-**Always set `quick_mode: false`.** All FPL queries go through Think → Act for full session context (current gameweek, manager ID, league context). Quick mode is not used in FPL.
-
 ---
 
 ## What You Don't Do
@@ -76,7 +72,6 @@ For each retention, provide a reason. Future Understand agents will read this:
 - **Don't rewrite the message** — Think has the raw message
 - **Don't invent refs** — Only use refs from the Entity Registry
 - **Don't over-interpret intent** — Just resolve references and curate context
-- **Don't set quick_mode to true** — FPL always uses Think → Act
 
 ---
 

@@ -76,6 +76,13 @@ THINK_PLANNING_GUIDE = """\
 - Middleware auto-injects the correct manager_id for "my squad" type requests
 - Rival squads: resolve mgr ref → middleware translates to the integer
 
+### Gameweek Reference
+
+The FPL Session Context (above) shows the **current gameweek number**. Always use it for GW calculations:
+- "Last 5 GWs" = current_gw - 4 to current_gw (e.g., GW 22 to 26)
+- "Next 5 GWs" = next_gw to next_gw + 4 (e.g., GW 27 to 31)
+- Include explicit GW numbers in step descriptions so Act can build correct filters.
+
 ### Read Patterns
 
 FPL is read-heavy. Most interactions chain multiple reads.
@@ -130,6 +137,27 @@ ANALYZE executes Python to derive insights from data. It does NOT recommend or p
 | GW breakdown | Total points by player, captain, bench | Suggest changes |
 | Value analysis | Compute price velocity, transfer trends | Advise on selling |
 
+### Two-Phase ANALYZE
+
+When analysis needs both FPL domain intelligence AND Python computation, plan TWO analyze steps:
+
+1. **FPL Assessment** — Domain intelligence: filter data quality, exclude irrelevant records, validate availability
+2. **Compute** — Python analytics: calculate metrics, rank, aggregate, compare
+
+**Description prefix convention:**
+- Descriptions starting with "FPL Assessment:" trigger domain-expert guidance (data quality, filtering, FPL rules)
+- Descriptions starting with "Compute:" trigger Python computation guidance (pandas, analytics helpers)
+- No prefix = generic (backward compatible)
+
+| Trigger phrase | Phase 1 (Assessment) | Phase 2 (Compute) |
+|---------------|---------------------|-------------------|
+| "compare players" | Filter to minutes > 60, active, not injured | Compute pts/m, rank by composite |
+| "analyze form" | Filter to players with recent minutes | Rolling averages, form trends |
+| "rank by value" | Filter to relevant position/price bracket | pts_per_m calculation, rank_by() |
+| "fixture difficulty" | Validate fixture data, map team FDRs | Pivot to grid, compute averages |
+
+**When to use single-phase (just Compute):** Simple computations where data quality isn't a concern — e.g., "count how many players per team", "sum squad value". Skip Assessment when the READ step already returns clean, filtered data.
+
 ### GENERATE Patterns
 
 GENERATE renders visual artifacts from data in context.
@@ -145,12 +173,13 @@ GENERATE renders visual artifacts from data in context.
 
 ### Complex Workflow Patterns
 
-**Captain data view:** (reads → analyze → optional chart)
+**Captain data view:** (reads → two-phase analyze → optional chart)
 1. READ squad (group 0)
 2. READ player_gameweeks for starting XI, last 5 GWs (group 0)
 3. READ fixtures for squad teams this GW (group 0)
-4. ANALYZE: rank starting XI by form, fixture, xGI, ownership — output comparison table (group 1)
-5. GENERATE (optional): bar chart of captain candidates by composite score (group 2)
+4. ANALYZE: "FPL Assessment: filter to starting XI with minutes > 60, flag injuries and rotation risks" (group 1)
+5. ANALYZE: "Compute: rank captain candidates by composite of form, fixture FDR, xGI, ownership" (group 2)
+6. GENERATE (optional): bar chart of captain candidates by composite score (group 3)
 
 **Rival differential:**
 1. READ rival squad (group 0)
@@ -159,7 +188,8 @@ GENERATE renders visual artifacts from data in context.
 **Transfer replacement search:**
 1. READ squad — confirm player + bank (group 0)
 2. READ available replacements within budget (group 1)
-3. ANALYZE: rank replacements by pts/£m, form, fixture difficulty (group 2)
+3. ANALYZE: "FPL Assessment: filter replacements to minutes > 60, not injured, valid position" (group 2)
+4. ANALYZE: "Compute: rank filtered replacements by pts/£m, form, fixture difficulty composite" (group 3)
 
 **League ownership map:**
 1. READ league standings — get all manager IDs (group 0)
@@ -172,5 +202,6 @@ GENERATE renders visual artifacts from data in context.
 
 **Player form chart:**
 1. READ player_gameweeks for target players, last N GWs (group 0)
-2. ANALYZE: add_rolling_mean for form trend (group 1)
-3. GENERATE: render_line of rolling form with raw points as scatter (group 2)"""
+2. ANALYZE: "FPL Assessment: filter to players with minutes > 0, exclude blank GWs" (group 1)
+3. ANALYZE: "Compute: add_rolling_mean for form trend, compute_form_trend for direction" (group 2)
+4. GENERATE: render_line of rolling form with raw points as scatter (group 3)"""

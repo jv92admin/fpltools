@@ -251,3 +251,49 @@ def test_subdomain_aliases_cover_common_terms():
     assert aliases["compare"] == "scouting"
     assert aliases["fdr"] == "fixtures"
     assert aliases["gw"] == "live"
+
+
+# ---------------------------------------------------------------------------
+# ANALYZE description-based example routing
+# ---------------------------------------------------------------------------
+
+from alfred_fpl.domain.prompts.examples import get_contextual_examples, _EXAMPLES
+
+
+def test_examples_assessment_routing():
+    """FPL Assessment prefix routes to assessment examples."""
+    result = get_contextual_examples("scouting", "analyze", "FPL Assessment: filter active players")
+    assert "minutes" in result.lower() or "filter" in result.lower()
+
+
+def test_examples_compute_routing():
+    """Compute prefix routes to compute examples."""
+    result = get_contextual_examples("scouting", "analyze", "Compute: rank by pts per million")
+    assert "pts_per_m" in result or "rank_by" in result
+
+
+def test_examples_no_prefix_fallback():
+    """No prefix falls back to generic subdomain:analyze."""
+    result = get_contextual_examples("scouting", "analyze", "compare players by form")
+    assert result  # Should return the existing scouting:analyze content
+
+
+def test_examples_case_insensitive():
+    """Prefix detection is case-insensitive."""
+    lower = get_contextual_examples("scouting", "analyze", "fpl assessment: filter data")
+    upper = get_contextual_examples("scouting", "analyze", "FPL Assessment: filter data")
+    assert lower == upper
+
+
+def test_examples_all_subdomains_have_assessment():
+    """Every subdomain with analyze examples also has assessment variant."""
+    for subdomain in ["scouting", "fixtures", "squad", "league"]:
+        key = f"{subdomain}:analyze:assessment"
+        assert key in _EXAMPLES, f"Missing {key}"
+
+
+def test_examples_all_subdomains_have_compute():
+    """Every subdomain with analyze examples also has compute variant."""
+    for subdomain in ["scouting", "fixtures", "squad", "league"]:
+        key = f"{subdomain}:analyze:compute"
+        assert key in _EXAMPLES, f"Missing {key}"

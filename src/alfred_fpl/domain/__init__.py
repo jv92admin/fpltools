@@ -544,6 +544,88 @@ class FPLConfig(DomainConfig):
                 "You help managers make informed decisions using real FPL data."
             )
 
+    def get_understand_system_prompt(self) -> str:
+        """Override Understand system prompt to remove quick mode detection.
+
+        FPL always uses full pipeline (Think → Act) — quick mode is disabled.
+        Core's default includes "(3) detect quick mode for simple READ-ONLY queries"
+        which we remove here.
+        """
+        return (
+            "You are Alfred's MEMORY MANAGER. "
+            "Your job: (1) resolve entity references to simple refs from the registry, "
+            "(2) curate context (decide what older entities stay active with reasons). "
+            "NEVER invent entity refs. Think has the raw message — "
+            "you just resolve refs and curate context."
+        )
+
+    def get_filter_schema(self) -> str:
+        """FPL-specific filter schema — replaces core's kitchen-oriented examples."""
+        return """## Filter Syntax
+
+Structure: `{"field": "<column>", "op": "<operator>", "value": <value>}`
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `=` | Exact match | `{"field": "gameweek", "op": "=", "value": 26}` |
+| `!=` | Not equal | `{"field": "status", "op": "!=", "value": "u"}` |
+| `>` `<` `>=` `<=` | Comparison | `{"field": "price", "op": "<=", "value": 8.0}` |
+| `in` | Value in array | `{"field": "player_id", "op": "in", "value": ["player_1", "player_2"]}` |
+| `not_in` | Exclude list | `{"field": "status", "op": "not_in", "value": ["i", "s"]}` |
+| `ilike` | Pattern match (% = wildcard) | `{"field": "web_name", "op": "ilike", "value": "%Sal%"}` |
+| `is_null` | Null check | `{"field": "news", "op": "is_null", "value": false}` |
+
+"""
+
+    def get_summarize_system_prompts(self) -> dict[str, str]:
+        """FPL-specific summarize prompts — replaces kitchen examples."""
+        return {
+            "response_summary": (
+                'Summarize what was accomplished in ONE sentence.\n'
+                'Focus on: what action was taken, what was created/found/updated.\n\n'
+                '**CRITICAL: Proposals ≠ Completed actions**\n'
+                'If the text says "I\'ll do X" or "Here\'s my plan" or "Does this sound good?" '
+                '— that\'s a PROPOSAL.\n'
+                'Do NOT summarize proposals as completed actions.\n\n'
+                '- Proposal: "I\'ll pull the fixture data" → Summary: "Proposed to fetch fixture data; '
+                'awaiting confirmation."\n'
+                '- Completed: "Done! Here\'s your squad:" → Summary: "Showed squad with 15 picks"\n\n'
+                '**CRITICAL: Use EXACT entity names from the text.** Do NOT paraphrase or generalize.\n'
+                'If the text says "Mohamed Salah", use that EXACT name.\n'
+                'Do NOT make up names that sound similar but aren\'t in the original text.\n\n'
+                'Good: "Showed top 5 midfielders by form: Salah, Palmer, Saka, Gordon, Mbeumo."\n'
+                'Bad: "Showed the midfielders." (too vague)\n'
+                'Bad: "Listed Mo Salah and others." (paraphrased name)\n\n'
+                'Keep summaries specific with exact names or IDs when available.'
+            ),
+            "turn_compression": (
+                'Summarize this conversation exchange in ONE brief sentence.\n'
+                'Focus on: what the user asked, what action was taken, any entities created/modified.\n\n'
+                '**CRITICAL: Proposals ≠ Completed actions**\n'
+                'If Alfred says "I\'ll do X" or "Here\'s my plan" → that\'s a PROPOSAL, '
+                'not a completed action.\n'
+                '- Proposal: "I\'ll analyze the fixtures" → "User asked about fixtures; '
+                'assistant proposed analysis plan"\n'
+                '- Completed: "Here\'s the fixture heatmap" → "Assistant showed fixture difficulty '
+                'heatmap for GW26-30"\n\n'
+                'Use EXACT entity names from the text. Don\'t invent names.'
+            ),
+            "conversation_compression": (
+                'Merge this conversation history into a brief summary.\n\n'
+                'Focus on:\n'
+                '- What data was explored (players, squads, fixtures, leagues)\n'
+                '- Key entities mentioned (specific player names, teams, gameweeks)\n'
+                '- Decisions or preferences expressed\n'
+                '- Current thread (what the user is working toward)\n\n'
+                'Drop:\n'
+                '- Greetings and pleasantries\n'
+                '- Repeated queries that were refined\n'
+                '- Repetitive phrases\n\n'
+                'Write as a single narrative: "User explored midfield options under £8m, '
+                'compared Saka vs Palmer form trends, then checked Arsenal fixtures..."'
+            ),
+        }
+
     def get_entity_recency_window(self) -> int:
         """Evict data refs faster — squad reads alone register 15 entities."""
         return 1
@@ -635,7 +717,7 @@ class FPLConfig(DomainConfig):
         # Load explicitly requested datasets
         for ref in dataset_refs:
             if ref in cache:
-                context[f"df_{ref}"] = cache[ref]
+                context[f"df_{ref}"] = cache[ref].copy()
             else:
                 logger.warning("Dataset '%s' not in cache — was it read in a prior step?", ref)
 
@@ -643,9 +725,47 @@ class FPLConfig(DomainConfig):
         for table_name, df in cache.items():
             key = f"df_{table_name}"
             if key not in context:
-                context[key] = df
+                context[key] = df.copy()
+
+        # Enrich DataFrames with human-readable names from FK lookups
+        self._enrich_dataframes(context, middleware)
 
         return context
+
+    def _enrich_dataframes(self, context: dict, middleware: Any) -> None:
+        """Add human-readable name columns to DataFrames with UUID FK columns.
+
+        Resolves UUID FKs to names so LLM-generated Python can reference
+        team names and player names directly instead of opaque UUIDs.
+        """
+        # Team UUID → short_name (from session bootstrap)
+        team_map = getattr(middleware, '_team_map', {})
+
+        # Enrich fixtures with team names
+        if "df_fixtures" in context and team_map:
+            df = context["df_fixtures"]
+            if "home_team_id" in df.columns and "home_team_name" not in df.columns:
+                df["home_team_name"] = df["home_team_id"].map(team_map).fillna("?")
+                df["away_team_name"] = df["away_team_id"].map(team_map).fillna("?")
+
+        # Build player map from cached players (if available)
+        player_map: dict[str, str] = {}
+        if "df_players" in context and "id" in context["df_players"].columns:
+            pdf = context["df_players"]
+            if "web_name" in pdf.columns:
+                player_map = dict(zip(pdf["id"], pdf["web_name"]))
+
+        # Enrich player_gameweeks with player names
+        if "df_player_gameweeks" in context and player_map:
+            df = context["df_player_gameweeks"]
+            if "player_id" in df.columns and "player_name" not in df.columns:
+                df["player_name"] = df["player_id"].map(player_map).fillna("?")
+
+        # Enrich player_snapshots with player names
+        if "df_player_snapshots" in context and player_map:
+            df = context["df_player_snapshots"]
+            if "player_id" in df.columns and "player_name" not in df.columns:
+                df["player_name"] = df["player_id"].map(player_map).fillna("?")
 
     async def _execute_analysis(self, params: dict, user_id: str, ctx: Any) -> dict:
         """Handler for fpl_analyze tool — runs Python code against FPL DataFrames.
@@ -766,6 +886,156 @@ class FPLConfig(DomainConfig):
             return "teams"
         return None
 
+    def format_records_for_reply(
+        self, records: list[dict], table_type: str | None, indent: int = 2
+    ) -> str | None:
+        """FPL-specific record formatting for Reply execution_summary.
+
+        Formats player, squad, fixture, and standings records as clean
+        domain-appropriate summaries instead of generic key-value dumps.
+        Returns None for unrecognized record types (Core's generic fallback).
+        """
+        if not records or not isinstance(records[0], dict):
+            return None
+
+        prefix = " " * indent
+        first = records[0]
+
+        # Player records
+        if table_type == "players" or ("web_name" in first and "price" in first):
+            lines = []
+            for r in records:
+                name = r.get("web_name", "?")
+                team = r.get("team_name", "")
+                price = r.get("price", "?")
+                pts = r.get("total_points", "")
+                form = r.get("form", "")
+                status = r.get("status", "a")
+                parts = [f"{prefix}- {name}"]
+                if team:
+                    parts[0] += f" ({team})"
+                parts[0] += f" — £{price}m"
+                if pts:
+                    parts.append(f"| {pts} pts")
+                if form:
+                    parts.append(f"| form {form}")
+                if status and status != "a":
+                    flags = {"i": "injured", "d": "doubtful", "s": "suspended", "u": "unavailable"}
+                    parts.append(f"| {flags.get(status, status)}")
+                    news = r.get("news", "")
+                    if news:
+                        parts.append(f"({news})")
+                lines.append(" ".join(parts))
+            return "\n".join(lines)
+
+        # Squad records
+        if table_type == "squads" or "is_captain" in first or "multiplier" in first:
+            lines = []
+            for r in records:
+                name = r.get("_player_id_label") or r.get("web_name") or r.get("player_name") or "?"
+                team = r.get("team_name", "")
+                pos = r.get("position_name", "")
+                slot = r.get("slot", 0)
+                captain = " (C)" if r.get("is_captain") else ""
+                vice = " (VC)" if r.get("is_vice_captain") else ""
+                bench = ""
+                if slot and slot >= 12:
+                    bench = f" [Bench {slot - 11}]"
+                parts = [f"{prefix}- {name}{captain}{vice}"]
+                if pos:
+                    parts.append(f"| {pos}")
+                if team:
+                    parts.append(f"| {team}")
+                if bench:
+                    parts.append(bench)
+                lines.append(" ".join(parts))
+            return "\n".join(lines)
+
+        # League standings
+        if table_type == "league_standings" or (
+            "rank" in first and "manager_name" in first
+        ):
+            lines = []
+            for r in records:
+                rank = r.get("rank", "?")
+                mgr = r.get("manager_name", "?")
+                team_name = r.get("team_name", "")
+                pts = r.get("total_points", "?")
+                gw_pts = r.get("event_points", "")
+                parts = [f"{prefix}- #{rank} {mgr}"]
+                if team_name:
+                    parts.append(f"({team_name})")
+                parts.append(f"— {pts} pts")
+                if gw_pts:
+                    parts.append(f"(GW: {gw_pts})")
+                lines.append(" ".join(parts))
+            return "\n".join(lines)
+
+        # Fixtures
+        if table_type == "fixtures" or (
+            "home_team_id" in first and "away_team_id" in first
+        ):
+            lines = []
+            for r in records:
+                home = r.get("home_team_name", r.get("home_team_id", "?"))
+                away = r.get("away_team_name", r.get("away_team_id", "?"))
+                gw = r.get("gameweek", "?")
+                h_diff = r.get("home_difficulty", "")
+                a_diff = r.get("away_difficulty", "")
+                h_score = r.get("home_score")
+                a_score = r.get("away_score")
+                parts = [f"{prefix}- GW{gw}: {home} vs {away}"]
+                if h_score is not None and a_score is not None:
+                    parts.append(f"({h_score}-{a_score})")
+                if h_diff and a_diff:
+                    parts.append(f"[FDR: {h_diff}/{a_diff}]")
+                lines.append(" ".join(parts))
+            return "\n".join(lines)
+
+        # Player gameweeks
+        if table_type == "player_gameweeks":
+            lines = []
+            for r in records:
+                name = r.get("_player_id_label") or r.get("web_name") or r.get("player_name") or "?"
+                gw = r.get("gameweek", "?")
+                pts = r.get("total_points", 0)
+                mins = r.get("minutes", 0)
+                goals = r.get("goals_scored", 0)
+                assists = r.get("assists", 0)
+                bonus = r.get("bonus", 0)
+                detail_parts = []
+                if mins:
+                    detail_parts.append(f"{mins} min")
+                if goals:
+                    detail_parts.append(f"{goals}G")
+                if assists:
+                    detail_parts.append(f"{assists}A")
+                if bonus:
+                    detail_parts.append(f"{bonus}B")
+                detail = f" ({', '.join(detail_parts)})" if detail_parts else ""
+                lines.append(f"{prefix}- GW{gw} {name}: {pts} pts{detail}")
+            return "\n".join(lines)
+
+        # Player snapshots (market data)
+        if table_type == "player_snapshots":
+            lines = []
+            for r in records:
+                name = r.get("_player_id_label") or r.get("web_name") or r.get("player_name") or "?"
+                price = r.get("price", "?")
+                tin = r.get("transfers_in_event", 0)
+                tout = r.get("transfers_out_event", 0)
+                own = r.get("selected_by_percent", "")
+                parts = [f"{prefix}- {name} — £{price}m"]
+                net = (tin or 0) - (tout or 0)
+                if tin or tout:
+                    parts.append(f"| net transfers: {net:+d}")
+                if own:
+                    parts.append(f"| {own}% owned")
+                lines.append(" ".join(parts))
+            return "\n".join(lines)
+
+        return None  # Fall through to Core's generic formatter
+
     def get_strip_fields(self, context: str = "injection") -> set[str]:
         from alfred_fpl.domain.formatters import INJECTION_STRIP_FIELDS, REPLY_STRIP_FIELDS
         return REPLY_STRIP_FIELDS if context == "reply" else INJECTION_STRIP_FIELDS
@@ -831,8 +1101,47 @@ class FPLConfig(DomainConfig):
                 manager_bridge, league_bridge, primary_manager_id
             )
 
+            # Cache team UUID→short_name map for DataFrame enrichment
+            team_resp = (
+                client.table("teams")
+                .select("id, short_name")
+                .limit(30)
+                .execute()
+            )
+            team_data = team_resp.data or []
+            team_map = {t["id"]: t["short_name"] for t in team_data}
+            self.get_crud_middleware().set_team_map(team_map)
+
+            # Extract numeric GW IDs for explicit context
+            current_gw: int | None = None
+            next_gw: int | None = None
+            for gw in gw_data:
+                fpl_gw_id = gw.get("fpl_id")
+                if gw.get("is_current") and fpl_gw_id is not None:
+                    current_gw = fpl_gw_id
+                elif gw.get("is_next") and fpl_gw_id is not None:
+                    next_gw = fpl_gw_id
+
+            # Store on middleware so Act can reference it
+            if current_gw is not None:
+                self.get_crud_middleware().current_gw = current_gw
+
             lines = ["## FPL Session Context"]
-            if gw_data:
+            if current_gw is not None:
+                finished = any(
+                    gw.get("is_current") and gw.get("finished") for gw in gw_data
+                )
+                lines.append(
+                    f"**Current Gameweek: {current_gw}**"
+                    f"{' (finished)' if finished else ''}"
+                )
+                if next_gw is not None:
+                    lines.append(f"**Next Gameweek: {next_gw}**")
+                lines.append(
+                    f"Use GW {current_gw} as the reference point. "
+                    f"\"Last 5 GWs\" = GW {current_gw - 4} to {current_gw}."
+                )
+            elif gw_data:
                 for gw in gw_data:
                     status = ""
                     if gw.get("is_current"):

@@ -56,6 +56,25 @@ COLORS = [
 - Not sorting data before plotting (line charts)
 - DPI != 150
 - Using seaborn (not in our stack, not whitelisted in executor)
+- Using `_home_team_id_label` or raw UUID columns — use `home_team_name`/`away_team_name` (enriched columns)
+- Using `itertuples()` with wrong attribute names — prefer column-based rename+concat pattern
+
+### Heatmap Data Prep (Proven Pattern)
+
+FDR heatmaps require unstacking fixtures (each row has home AND away data) into a team × GW grid:
+
+```python
+# CORRECT: rename+concat pattern (tested, reliable)
+home = df_fixtures[['home_team_name', 'gameweek', 'home_difficulty']].rename(
+    columns={'home_team_name': 'team', 'home_difficulty': 'difficulty'})
+away = df_fixtures[['away_team_name', 'gameweek', 'away_difficulty']].rename(
+    columns={'away_team_name': 'team', 'away_difficulty': 'difficulty'})
+all_rows = pd.concat([home, away])
+pivot = all_rows.pivot_table(index='team', columns='gameweek', values='difficulty', aggfunc='mean')
+render_heatmap(pivot, title='Fixture Difficulty', cmap='RdYlGn_r', vmin=1, vmax=5)
+```
+
+**Why this pattern:** Fixtures have one row per match with both teams' data. The LLM's instinct is to iterate with `iterrows()` or `itertuples()` and build dicts — this is fragile (attribute name mismatches). The rename+concat pattern is vectorized, readable, and proven in production.
 
 ## When Reviewing Code
 

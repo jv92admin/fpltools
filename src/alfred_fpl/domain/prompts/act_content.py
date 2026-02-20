@@ -79,7 +79,7 @@ _CRUD_TOOLS = r"""
 | `columns` | array | Specific columns (omit for all) |
 | `limit` | int | Max rows to return |
 | `order_by` | string | Column to sort by (e.g., "total_points") |
-| `ascending` | bool | Sort direction (default: false = descending) |
+| `order_dir` | string | `"asc"` or `"desc"` (default: `"desc"`) |
 
 ### Filter Syntax
 
@@ -166,6 +166,7 @@ Your job is to execute what Think planned. Only filter when the step description
       {"field": "price", "op": "<=", "value": 8.0}
     ],
     "order_by": "total_points",
+    "order_dir": "desc",
     "limit": 20
   }
 }
@@ -240,6 +241,17 @@ DataFrames from prior READ steps are automatically available:
 - `df_teams`, `df_positions`, `df_gameweeks`
 - `df_manager_seasons`
 
+### DataFrame Column Reference
+
+DataFrames are enriched with human-readable names before execution:
+
+- **df_fixtures**: `gameweek`, `home_team_name`, `away_team_name`, `home_difficulty`, `away_difficulty`, `finished`, `kickoff_time`
+- **df_players**: `web_name`, `price`, `total_points`, `form`, `points_per_game`, `selected_by_percent`, `status`, `minutes`
+- **df_player_gameweeks**: `player_name`, `gameweek`, `total_points`, `minutes`, `goals_scored`, `assists`, `bonus`
+- **df_player_snapshots**: `player_name`, `gameweek`, `price`, `selected_by_percent`, `form`
+
+**Important:** Use `home_team_name`/`away_team_name` for fixtures (NOT `_home_team_id_label`). Use `player_name` on player_gameweeks (NOT `player_id`) for display.
+
 ### Available Analytics Functions
 
 ```python
@@ -251,13 +263,13 @@ compute_differentials(squad_a, squad_b, player_col='player_id')
 compute_price_velocity(snapshots_df)
 ```
 
-**`pd` (pandas) and `np` (numpy) are pre-loaded — do NOT import them.**
+**NEVER use import statements.** `pd`, `np`, and all analytics functions above are pre-loaded.
 
 ### How to Execute
 
 1. Read the step description — what analysis is needed
 2. Check which DataFrames are available from prior steps
-3. Write Python code using pandas + analytics helpers
+3. Write Python code using pandas + analytics helpers (NO imports)
 4. Call `fpl_analyze` with the code
 5. `step_complete` with the analysis results
 
@@ -336,7 +348,18 @@ render_heatmap(df, title=None, cmap='RdYlGn_r', vmin=1, vmax=5)
 render_comparison(dfs={name: df}, metrics=[str], title=None)
 ```
 
-All DataFrames from prior steps are available. `pd`, `np`, and all analytics functions are pre-loaded — do NOT import them.
+All DataFrames from prior steps are available as variables (e.g., `df_players`, `df_fixtures`).
+
+**NEVER use import statements.** `pd`, `np`, and all chart/analytics functions are pre-loaded.
+```python
+# ❌ WRONG — will crash:
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# ✅ RIGHT — pd is already available:
+df = pd.DataFrame(data)
+render_bar(df, x='metric', y='name', horizontal=True)
+```
 
 ### How to Execute
 
@@ -353,6 +376,18 @@ All DataFrames from prior steps are available. `pd`, `np`, and all analytics fun
 - **Comparison bars:** Horizontal bars, sorted by primary metric descending
 - **Price trends:** Line chart with price on y-axis, gameweek on x-axis
 
+### DataFrame Column Reference
+
+DataFrames are enriched with human-readable names before execution:
+
+- **df_fixtures**: `gameweek`, `home_team_name`, `away_team_name`, `home_difficulty`, `away_difficulty`, `finished`, `kickoff_time`
+- **df_players**: `web_name`, `price`, `total_points`, `form`, `points_per_game`, `selected_by_percent`, `status`, `minutes`
+- **df_player_gameweeks**: `player_name`, `gameweek`, `total_points`, `minutes`, `goals_scored`, `assists`, `bonus`
+- **df_player_snapshots**: `player_name`, `gameweek`, `price`, `selected_by_percent`, `form`
+- **df_squads**: `web_name` (if enriched), `is_captain`, `is_vice_captain`, `multiplier`, `bench_order`
+
+**Important:** Use `home_team_name`/`away_team_name` (NOT `_home_team_id_label`). Use `player_name` (NOT `player_id`) for display.
+
 ### Worked Example: Fixture Difficulty Heatmap
 
 ```json
@@ -360,7 +395,7 @@ All DataFrames from prior steps are available. `pd`, `np`, and all analytics fun
   "action": "tool_call",
   "tool": "fpl_plot",
   "params": {
-    "code": "# Pivot fixtures into team × GW grid\npivot = df_fixtures.pivot_table(index='team_name', columns='gameweek', values='difficulty', aggfunc='mean')\nrender_heatmap(pivot, title='Fixture Difficulty (GW27-31)', cmap='RdYlGn_r', vmin=1, vmax=5)",
+    "code": "# Unstack home/away into rows, then pivot to team × GW grid\nhome = df_fixtures[['home_team_name', 'gameweek', 'home_difficulty']].rename(columns={'home_team_name': 'team', 'home_difficulty': 'difficulty'})\naway = df_fixtures[['away_team_name', 'gameweek', 'away_difficulty']].rename(columns={'away_team_name': 'team', 'away_difficulty': 'difficulty'})\nall_rows = pd.concat([home, away])\npivot = all_rows.pivot_table(index='team', columns='gameweek', values='difficulty', aggfunc='mean')\nrender_heatmap(pivot, title='Fixture Difficulty (GW27-31)', cmap='RdYlGn_r', vmin=1, vmax=5)",
     "title": "Fixture Difficulty Heatmap GW27-31"
   }
 }
@@ -373,8 +408,21 @@ All DataFrames from prior steps are available. `pd`, `np`, and all analytics fun
   "action": "tool_call",
   "tool": "fpl_plot",
   "params": {
-    "code": "# Compare form trend for two players\nrender_line(df_player_gameweeks, x='gameweek', y='total_points', hue='player_name', title='Points per GW: Rice vs Rogers')",
+    "code": "# Compare form trend for two players (player_name is enriched from player_id)\nrender_line(df_player_gameweeks, x='gameweek', y='total_points', hue='player_name', title='Points per GW: Rice vs Rogers')",
     "title": "Form Comparison: Rice vs Rogers"
+  }
+}
+```
+
+### Worked Example: Bar Chart from Computed Data
+
+```json
+{
+  "action": "tool_call",
+  "tool": "fpl_plot",
+  "params": {
+    "code": "# Build DataFrame from prior step results — NO imports needed\ndata = [{'name': 'Guéhi', 'pts_per_m': 23.85}, {'name': 'Lacroix', 'pts_per_m': 22.75}, {'name': 'Chalobah', 'pts_per_m': 21.38}]\ndf = pd.DataFrame(data).sort_values('pts_per_m', ascending=True)\nrender_bar(df, x='pts_per_m', y='name', horizontal=True, title='Top Defenders by Points per Million')",
+    "title": "Top Defenders by Points per Million"
   }
 }
 ```

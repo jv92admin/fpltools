@@ -33,6 +33,13 @@ MANAGER_SCOPED_TABLES: set[str] = {
     "squads", "transfers", "manager_seasons",
 }
 
+# Tables where current gameweek should be auto-injected if no GW filter present.
+# Without this, queries return rows from ALL synced gameweeks — e.g., squads
+# with limit=15 returns 15 copies of slot=1 across different GWs.
+GW_SCOPED_TABLES: set[str] = {
+    "squads",
+}
+
 # Tables scoped by integer league_id
 LEAGUE_SCOPED_TABLES: set[str] = {
     "league_standings",
@@ -110,7 +117,14 @@ class FPLMiddleware(CRUDMiddleware):
         self._manager_bridge: dict[str, int] = {}   # UUID → FPL integer manager_id
         self._league_bridge: dict[str, int] = {}     # UUID → FPL integer league_id
         self._primary_manager_id: int | None = None
+        self.current_gw: int | None = None            # Set by get_domain_snapshot()
         self._dataframe_cache: dict[str, pd.DataFrame] = {}  # table → DataFrame from last read
+        self._team_map: dict[str, str] = {}  # UUID → short_name (for DataFrame enrichment)
+
+    def set_team_map(self, team_map: dict[str, str]):
+        """Cache team UUID→short_name map for DataFrame enrichment."""
+        self._team_map = team_map
+        logger.debug("Team map set: %d teams", len(team_map))
 
     def set_bridges(
         self,
@@ -149,6 +163,16 @@ class FPLMiddleware(CRUDMiddleware):
                     FilterClause(field="manager_id", op="=", value=self._primary_manager_id)
                 )
                 logger.debug("Auto-injected primary manager_id=%s on %s", self._primary_manager_id, table)
+
+        # 3b. Auto-inject current gameweek if missing on GW-scoped tables
+        if table in GW_SCOPED_TABLES:
+            has_gw_filter = any(f.field == "gameweek" for f in filters)
+            if not has_gw_filter and self.current_gw is not None:
+                from alfred.tools.crud import FilterClause
+                filters.append(
+                    FilterClause(field="gameweek", op="=", value=self.current_gw)
+                )
+                logger.debug("Auto-injected gameweek=%s on %s", self.current_gw, table)
 
         # 4. Auto-inject league_id if missing on league-scoped tables
         if table in LEAGUE_SCOPED_TABLES:
