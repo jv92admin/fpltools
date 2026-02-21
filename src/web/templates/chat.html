@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="chat-container">
+    <header class="chat-header">
+        <h1>Alfred FPL</h1>
+        <div class="header-actions">
+            <form method="post" action="/chat/reset" class="inline-form">
+                <button type="submit" class="btn btn-small">New chat</button>
+            </form>
+            <form method="post" action="/auth/logout" class="inline-form">
+                <button type="submit" class="btn btn-small btn-muted">Log out</button>
+            </form>
+        </div>
+    </header>
+
+    <div class="messages" id="messages">
+        {% if not messages %}
+        <div class="welcome-msg">
+            <p><strong>Ask me anything about FPL.</strong></p>
+            <p>Try: "show my squad", "who should I captain?", or "compare my team with the league leader"</p>
+        </div>
+        {% endif %}
+
+        {% for msg in messages %}
+        <div class="msg msg-{{ msg.role }}">
+            {% if msg.role == 'user' %}
+                <div class="msg-content">{{ msg.content }}</div>
+            {% else %}
+                <div class="msg-content">{{ msg.content | safe }}</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+
+    <div id="progress-area"></div>
+
+    <form id="chat-form" class="chat-input-area">
+        <input
+            type="text"
+            name="message"
+            id="message-input"
+            placeholder="Ask Alfred..."
+            autocomplete="off"
+            required
+        />
+        <button type="submit" id="send-btn" class="btn btn-primary">Send</button>
+    </form>
+</div>
+
+<script>
+(function() {
+    const form = document.getElementById('chat-form');
+    const input = document.getElementById('message-input');
+    const messagesDiv = document.getElementById('messages');
+    const progressArea = document.getElementById('progress-area');
+    const sendBtn = document.getElementById('send-btn');
+
+    function scrollToBottom() {
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const message = input.value.trim();
+        if (!message) return;
+
+        // Add user message to chat
+        const userBubble = document.createElement('div');
+        userBubble.className = 'msg msg-user';
+        userBubble.innerHTML = '<div class="msg-content">' + escapeHtml(message) + '</div>';
+        messagesDiv.appendChild(userBubble);
+        scrollToBottom();
+
+        // Clear input and disable
+        input.value = '';
+        sendBtn.disabled = true;
+        input.disabled = true;
+
+        // Show progress
+        progressArea.innerHTML = '<div class="progress-indicator"><span class="spinner"></span> <span id="progress-text">Thinking...</span></div>';
+
+        // Remove welcome message if present
+        const welcome = messagesDiv.querySelector('.welcome-msg');
+        if (welcome) welcome.remove();
+
+        // Start SSE connection
+        const formData = new FormData();
+        formData.append('message', message);
+
+        const evtSource = new EventSource('/chat/send?' + new URLSearchParams({message: message}));
+
+        // Actually, EventSource only does GET. Use fetch + ReadableStream for POST SSE.
+        evtSource.close();
+
+        fetch('/chat/send', {
+            method: 'POST',
+            body: formData,
+        }).then(response => {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            function read() {
+                reader.read().then(({done, value}) => {
+                    if (done) {
+                        finalize();
+                        return;
+                    }
+                    buffer += decoder.decode(value, {stream: true});
+
+                    // Parse SSE events from buffer
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // keep incomplete line in buffer
+
+                    let eventType = '';
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            eventType = line.substring(7);
+                        } else if (line.startsWith('data: ')) {
+                            const data = line.substring(6);
+                            handleEvent(eventType, data);
+                        }
+                    }
+                    read();
+                });
+            }
+            read();
+        }).catch(err => {
+            progressArea.innerHTML = '';
+            const errorBubble = document.createElement('div');
+            errorBubble.className = 'msg msg-assistant msg-error';
+            errorBubble.innerHTML = '<div class="msg-content">Connection error. Please try again.</div>';
+            messagesDiv.appendChild(errorBubble);
+            finalize();
+        });
+
+        function handleEvent(type, data) {
+            if (type === 'progress') {
+                const pt = document.getElementById('progress-text');
+                if (pt) pt.textContent = data;
+            } else if (type === 'message') {
+                // Response HTML (newlines encoded as &#10;)
+                const html = data.replace(/&#10;/g, '\n');
+                const assistantBubble = document.createElement('div');
+                assistantBubble.className = 'msg msg-assistant';
+                assistantBubble.innerHTML = '<div class="msg-content">' + html + '</div>';
+                messagesDiv.appendChild(assistantBubble);
+                scrollToBottom();
+            } else if (type === 'chart') {
+                // Chart URL — will be embedded in the message HTML already
+            } else if (type === 'error') {
+                const errorBubble = document.createElement('div');
+                errorBubble.className = 'msg msg-assistant msg-error';
+                errorBubble.innerHTML = '<div class="msg-content">' + escapeHtml(data) + '</div>';
+                messagesDiv.appendChild(errorBubble);
+                scrollToBottom();
+            } else if (type === 'done') {
+                finalize();
+            }
+        }
+
+        function finalize() {
+            progressArea.innerHTML = '';
+            sendBtn.disabled = false;
+            input.disabled = false;
+            input.focus();
+            scrollToBottom();
+        }
+    });
+
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // Auto-scroll on load if there are messages
+    scrollToBottom();
+})();
+</script>
+{% endblock %}

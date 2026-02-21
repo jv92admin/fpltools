@@ -30,6 +30,13 @@ matplotlib>=3.7.0
 pandera>=0.18.0
 pydantic>=2.0.0
 
+# Web UI
+fastapi>=0.115.0
+uvicorn>=0.30.0
+python-multipart>=0.0.9
+markdown>=3.6
+itsdangerous>=2.1.0
+
 # Environment
 python-dotenv>=1.0.0
 
