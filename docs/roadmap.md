@@ -84,7 +84,7 @@ A BI engineer on demand. The user asks an FPL question, Alfred fetches data, wri
 - [x] Improve Reply integration with ANALYZE output (test4 rival comparison)
 - [x] Sync rival squad data — all 22 league members' GW26 picks synced (330 rows)
 - [x] Fix league rivalry prompts: rival manager_id explicit pass, remove league_name filters, 4-step Think pattern
-- [ ] Expand eval to cover edge cases (multi-turn memory, entity resolution across turns)
+- [x] Expand eval to cover edge cases (multi-turn memory, entity resolution across turns)
 
 ### Phase 6: UI / Artifact Display
 - [ ] Chart file path → frontend rendering (PNG display)
@@ -149,7 +149,7 @@ A BI engineer on demand. The user asks an FPL question, Alfred fetches data, wri
 
 ---
 
-## Eval Results (Phase 4 — 12/12 Pass)
+## Eval Results (Phase 5 — 15/15 Pass)
 
 | Test | Turns | Steps | Time | Notes |
 |------|-------|-------|------|-------|
@@ -166,7 +166,11 @@ A BI engineer on demand. The user asks an FPL question, Alfred fetches data, wri
 | test11: Transfer Replace | 2 | READ+ANALYZE+GENERATE | 103s | Bar chart (31KB) |
 | test12: Full Pipeline | 1 | READ+ANALYZE+GENERATE | 18s | Heatmap (80KB) |
 
-**Totals:** 10 ANALYZE, 4 GENERATE, 4 charts
+| test13: Live Scorecard | 2 | READ | 76s | 68pts GW26, bonus points (Rice 3, Semenyo 3, Thiaw 1) |
+| test14: Entity Resolution | 2 | READ+ANALYZE | 91s | Cross-turn: league table → "Afdal vs Krishanth" resolved correctly |
+| test15: Context Refinement | 3 | READ+ANALYZE | 97s | 3-turn narrowing: top 10 MIDs → under 8m → GW22-26 form |
+
+**Totals:** 12 ANALYZE, 4 GENERATE, 4 charts
 
 ---
 
