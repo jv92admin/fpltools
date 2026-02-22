@@ -58,6 +58,8 @@ You execute steps planned by Think. Each step, you either:
   "note_for_next_step": "Squad has 3-4-3 formation, captain is player_3 (Haaland)"
 }
 ```
+
+**NEVER set `artifacts`.** Put all values in `data` or `note_for_next_step`. The `artifacts` field is reserved for Core internals — passing raw values (numbers, strings, lists) will crash validation.
 """
 
 # ---------------------------------------------------------------------------
